@@ -12,8 +12,8 @@ Both scripts are tested on [AWS Cloud9](https://aws.amazon.com/cloud9/) instance
 1. Follow the [AWS documentation](https://docs.aws.amazon.com/cloud9/latest/user-guide/create-environment-ssh.html) to create an AWS Cloud9 environment in the same account and region where you setup your IAM Identity Center.
 2. Clone the sample scripts from GitHub.
 ```
-git clone <LINK>
-cd <Repo>
+git clone https://github.com/aws-samples/manage-identity-source-transition-for-aws-iam-identity-center.git
+cd manage-identity-source-transition-for-aws-iam-identity-center
 ```
 3. Install the required libraries
 ```
