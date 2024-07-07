@@ -37,9 +37,9 @@ export IDC_ID=<NEW-IDC-STORE-ID>
 
 ### Executing the backup and restore scripts
 
-The backup.py script should be ran prior to switching your identity source. 
+The [backup.py](https://github.com/aws-samples/manage-identity-source-transition-for-aws-iam-identity-center/blob/main/backup.py) script should be ran prior to switching your identity source. 
 
-This restore.py script should be ran after you change to the target identity source, and have synced over your users and groups.
+The [restore.py](https://github.com/aws-samples/manage-identity-source-transition-for-aws-iam-identity-center/blob/main/restore.py) script should be ran after you change to the target identity source, and have synced over your users and groups.
 
 Both scirpts base the assignment association with unique `UserName` attribute for users, and `DisplayName` attribute for groups. 
 
