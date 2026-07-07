@@ -41,7 +41,7 @@ The [backup.py](https://github.com/aws-samples/manage-identity-source-transition
 
 The [restore.py](https://github.com/aws-samples/manage-identity-source-transition-for-aws-iam-identity-center/blob/main/restore.py) script should be ran after you change to the target identity source, and have synced over your users and groups.
 
-Both scirpts base the assignment association with unique `UserName` attribute for users, and `DisplayName` attribute for groups. 
+Both scripts base the assignment association with unique `UserName` attribute for users, and `DisplayName` attribute for groups. 
 
 #### Running the backup.py
 
