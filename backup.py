@@ -67,60 +67,116 @@ def write_to_json_file(filename, content):
         json.dump({os.path.splitext(filename)[0]: content}, f)
 
 ###############################################################################
-###### IdC User Permission Set Backup
-###### Assuming UserName is unique and constant
+###### IdC User/Group Permission Set Backup
+######
+###### NOTE: ListAccountAssignmentsForPrincipal (used in an earlier version of
+###### this script) does not return literal, direct-only assignments for a
+###### USER principal. It returns that user's *effective* access, direct
+###### assignments plus anything inherited via group membership, both
+###### reported as if they were direct to the user. That produced a
+###### "(direct)" duplicate of every group-derived grant in the backup for
+###### every user, which is not real AWS state. This version instead walks
+###### every permission set's provisioned accounts and reads the literal
+###### assignment records via ListAccountAssignments (account + permission
+###### set scoped, no principal input, so there is no expansion to resolve).
 ###############################################################################
-def get_principal_account_assignments(identity_store_arn, principal_id, principal_type):
-    try: 
-        response = sso_admin_client.list_account_assignments_for_principal(
-            InstanceArn=identity_store_arn, 
-            PrincipalId=principal_id,
-            PrincipalType=principal_type)
-        results = response['AccountAssignments']
-    except: 
-        logger.error("Unable to list assignments for {} id: {}".format(principal_type, principal_id))
-        return
-    
+def get_permission_set_arns(identity_store_arn):
+    try:
+        response = sso_admin_client.list_permission_sets(InstanceArn=identity_store_arn)
+        results = response['PermissionSets']
+    except:
+        logger.error("Unable to call ListPermissionSets API call using idc_instance_arn: {}".format(identity_store_arn))
+        sys.exit(1)
+
     while "NextToken" in response:
-        response = sso_admin_client.list_account_assignments_for_principal(
-            InstanceArn=identity_store_arn, 
-            PrincipalId=principal_id,
-            PrincipalType=principal_type, 
-            NextToken=response["NextToken"]
-        )
+        response = sso_admin_client.list_permission_sets(
+            InstanceArn=identity_store_arn,
+            NextToken=response["NextToken"])
+        results.extend(response["PermissionSets"])
+
+    return results
+
+def get_accounts_for_permission_set(identity_store_arn, permission_set_arn):
+    try:
+        response = sso_admin_client.list_accounts_for_provisioned_permission_set(
+            InstanceArn=identity_store_arn,
+            PermissionSetArn=permission_set_arn)
+        results = response['AccountIds']
+    except:
+        logger.error("Unable to list provisioned accounts for permission set: {}".format(permission_set_arn))
+        return []
+
+    while "NextToken" in response:
+        response = sso_admin_client.list_accounts_for_provisioned_permission_set(
+            InstanceArn=identity_store_arn,
+            PermissionSetArn=permission_set_arn,
+            NextToken=response["NextToken"])
+        results.extend(response["AccountIds"])
+
+    return results
+
+def get_literal_account_assignments(identity_store_arn, account_id, permission_set_arn):
+    try:
+        response = sso_admin_client.list_account_assignments(
+            InstanceArn=identity_store_arn,
+            AccountId=account_id,
+            PermissionSetArn=permission_set_arn)
+        results = response['AccountAssignments']
+    except:
+        logger.error("Unable to list assignments for account: {} permission set: {}".format(account_id, permission_set_arn))
+        return []
+
+    while "NextToken" in response:
+        response = sso_admin_client.list_account_assignments(
+            InstanceArn=identity_store_arn,
+            AccountId=account_id,
+            PermissionSetArn=permission_set_arn,
+            NextToken=response["NextToken"])
         results.extend(response["AccountAssignments"])
-    
-    return [ {sub['PermissionSetArn']:sub['AccountId']} for sub in results]
 
-def backup_user_assignments(identity_store_arn, filename):
+    return results
+
+def backup_account_assignments(identity_store_arn, user_filename, group_filename):
     user_assignments = {}
-    
-    for userid, username in users.items():
-        assignments = get_principal_account_assignments(identity_store_arn, userid, 'USER')
-        if assignments == None: 
-            continue
-        user_assignments[username] = assignments
-        logger.info("Retrieved {} account assignments for USER id: {}".format(len(assignments), userid))
-    
-    write_to_json_file(filename, user_assignments)
-    
-
-###############################################################################
-###### IdC Group Permission Set Backup
-###### Assuming DisplayName is unique and constant
-###############################################################################
-
-def backup_group_assignments(identity_store_arn, filename):
     group_assignments = {}
-    
-    for groupid, displayname in groups.items():
-        assignments = get_principal_account_assignments(identity_store_arn, groupid, 'GROUP')
-        if assignments == None: 
-            continue
-        group_assignments[displayname] = assignments
-        logger.info("Retrieved {} account assignments for GROUP id: {}".format(len(assignments), groupid))
-    
-    write_to_json_file(filename, group_assignments)
+
+    permission_set_arns = get_permission_set_arns(identity_store_arn)
+    logger.info("Found {} permission sets".format(len(permission_set_arns)))
+
+    for permission_set_arn in permission_set_arns:
+        account_ids = get_accounts_for_permission_set(identity_store_arn, permission_set_arn)
+        for account_id in account_ids:
+            assignments = get_literal_account_assignments(identity_store_arn, account_id, permission_set_arn)
+            for assignment in assignments:
+                principal_id = assignment['PrincipalId']
+                principal_type = assignment['PrincipalType']
+                entry = {permission_set_arn: account_id}
+
+                if principal_type == 'USER':
+                    username = users.get(principal_id)
+                    if not username:
+                        logger.warning(
+                            "Skipping assignment for unknown USER principal id: {} (account {}, permission set {}); "
+                            "likely an orphaned assignment left behind after the user was deleted".format(
+                                principal_id, account_id, permission_set_arn))
+                        continue
+                    user_assignments.setdefault(username, []).append(entry)
+                elif principal_type == 'GROUP':
+                    displayname = groups.get(principal_id)
+                    if not displayname:
+                        logger.warning(
+                            "Skipping assignment for unknown GROUP principal id: {} (account {}, permission set {})".format(
+                                principal_id, account_id, permission_set_arn))
+                        continue
+                    group_assignments.setdefault(displayname, []).append(entry)
+
+    for username, assignments in user_assignments.items():
+        logger.info("Retrieved {} direct account assignments for USER: {}".format(len(assignments), username))
+    for displayname, assignments in group_assignments.items():
+        logger.info("Retrieved {} account assignments for GROUP: {}".format(len(assignments), displayname))
+
+    write_to_json_file(user_filename, user_assignments)
+    write_to_json_file(group_filename, group_assignments)
 
 ###############################################################################
 ###### IdC Application Assignment  Backup
@@ -202,6 +258,5 @@ if __name__ == "__main__":
     logger.info("Successfully retrieved information for {} applications".format(len(apps)))
     
     # backing up mappings for users and groups
-    backup_user_assignments(idc_instance_arn, args.user_assignments_backup)
-    backup_group_assignments(idc_instance_arn, args.group_assignments_backup)
+    backup_account_assignments(idc_instance_arn, args.user_assignments_backup, args.group_assignments_backup)
     backup_app_assignments(idc_instance_arn, args.app_assignments_backup)
